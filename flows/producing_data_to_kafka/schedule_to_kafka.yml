@@ -1,0 +1,24 @@
+id: schedule_to_kafka
+namespace: orchestrating.streams.producer
+tasks:
+  - id: fetch
+    type: io.kestra.plugin.core.http.Request
+    description: Fetch current weather data for Paris from Open-Meteo API.
+    uri: https://api.open-meteo.com/v1/forecast?latitude=48.8566&longitude=2.3514&current_weather=true
+    method: GET
+
+  - id: produce
+    type: io.kestra.plugin.kafka.Produce
+    description: Publish the fetched Paris weather data to a Kafka topic.
+    properties:
+      bootstrap.servers: "kafka:29092"
+    topic: paris_weather_topic
+    valueSerializer: JSON
+    from: "{{ outputs.fetch_paris_weather.body }}"
+
+triggers:
+  - id: every_5_seconds
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/5 * * * * *"
+    withSeconds: true
+    disabled: true

@@ -1,0 +1,26 @@
+id: realtime_datagen_to_kafka
+namespace: orchestrating.streams.producer
+tasks:
+  - id: produce
+    type: io.kestra.plugin.kafka.Produce
+    topic: "datagen_topic"
+    properties:
+      bootstrap.servers: "kafka:29092"
+    valueSerializer: JSON
+    from: "{{ trigger.value }}"
+triggers:
+  - id: datagen
+    disabled: true
+    type: io.kestra.plugin.datagen.RealtimeTrigger
+    throughput: 10
+    generator:
+      type: io.kestra.plugin.datagen.generators.JsonObjectGenerator
+      value:
+        name: "#{name.fullName}"
+        email: "#{internet.emailAddress}"
+        age: 30
+        address:
+          city: "#{address.city}"
+          zip: "#{address.zipCode}"
+        skills: [ "#{job.keySkills}", "#{job.position}", "hardcoded" ]
+        ts: "{{ now() }}"

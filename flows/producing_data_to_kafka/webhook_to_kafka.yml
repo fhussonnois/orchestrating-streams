@@ -1,0 +1,14 @@
+id: webhook_to_kafka
+namespace: orchestrating.streams.producer
+tasks:
+  - id: produce
+    type: io.kestra.plugin.kafka.Produce
+    topic: "webhook_topic"
+    valueSerializer: JSON
+    properties:
+      bootstrap.servers: "kafka:29092"
+    from: "{{ trigger.body }}"
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: "my-secret-webhook-key"

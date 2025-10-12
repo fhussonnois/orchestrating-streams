@@ -1,0 +1,40 @@
+id: postgres_sql_to_kafka
+namespace: orchestrating.streams.producer
+tasks:
+  - id: each
+    type: io.kestra.plugin.core.flow.ForEach
+    values: "{{ trigger.rows }}"
+    tasks:
+      - id: produce
+        type: io.kestra.plugin.kafka.Produce
+        topic: "orders_topic"
+        properties:
+          bootstrap.servers: "kafka:29092"
+        valueSerializer: JSON
+        # Convert the result row to JSON
+        from: "{{ json(taskrun.value) }}"
+
+      - id: mark_as_processed
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        description: Mark the row as processed after successful publication.
+        sql: |
+          UPDATE orders
+          SET processed = true
+          WHERE id = {{ json(taskrun.value).id }}
+        url: jdbc:postgresql://postgres:5432/kestra
+        username: kestra
+        password: k3str4
+
+triggers:
+  - id: sql_trigger
+    type: io.kestra.plugin.jdbc.postgresql.Trigger
+    interval: "PT30S"
+    url: jdbc:postgresql://postgres:5432/kestra
+    username: kestra
+    password: k3str4
+    sql: |
+      SELECT *
+      FROM orders
+      WHERE processed = false LIMIT 100
+    fetchType: FETCH
+    disabled: true

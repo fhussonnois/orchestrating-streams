@@ -1,0 +1,14 @@
+id: produce_to_kafka
+namespace: orchestrating.streams.producer
+tasks:
+  - id: produce
+    type: io.kestra.plugin.kafka.Produce
+    topic: "hello_topic"
+    properties:  
+      bootstrap.servers: "kafka:29092"
+    keySerializer: STRING
+    valueSerializer: JSON
+    key: "my-key"
+    from:
+      "event": "Hello Kafka!"
+      "timestamp": "{{ taskrun.startDate }}"
