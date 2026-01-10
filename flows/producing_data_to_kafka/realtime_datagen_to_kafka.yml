@@ -7,7 +7,11 @@ tasks:
     properties:
       bootstrap.servers: "kafka:29092"
     valueSerializer: JSON
-    from: "{{ trigger.value }}"
+    from:
+      key: "{{ trigger.value.email }}"
+      value: "{{ trigger.value }}"
+      headers:
+        source: "/kestra/namespace/{{flow.namespace}}/flow/{{flow.id}}"
 triggers:
   - id: datagen
     disabled: true

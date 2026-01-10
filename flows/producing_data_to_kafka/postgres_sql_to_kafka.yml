@@ -12,7 +12,8 @@ tasks:
           bootstrap.servers: "kafka:29092"
         valueSerializer: JSON
         # Convert the result row to JSON
-        from: "{{ json(taskrun.value) }}"
+        from:
+          value: "{{ json(taskrun.value) }}"
 
       - id: mark_as_processed
         type: io.kestra.plugin.jdbc.postgresql.Query

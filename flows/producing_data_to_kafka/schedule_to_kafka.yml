@@ -1,5 +1,6 @@
 id: schedule_to_kafka
 namespace: orchestrating.streams.producer
+
 tasks:
   - id: fetch
     type: io.kestra.plugin.core.http.Request
@@ -14,7 +15,8 @@ tasks:
       bootstrap.servers: "kafka:29092"
     topic: paris_weather_topic
     valueSerializer: JSON
-    from: "{{ outputs.fetch_paris_weather.body }}"
+    from: 
+      value: "{{ outputs.fetch_paris_weather.body }}"
 
 triggers:
   - id: every_5_seconds

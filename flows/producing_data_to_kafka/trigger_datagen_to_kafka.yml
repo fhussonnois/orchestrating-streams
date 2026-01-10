@@ -4,14 +4,19 @@ tasks:
   - id: produce
     type: io.kestra.plugin.kafka.Produce
     topic: "datagen_topic"
+    keySerializer: STRING
     valueSerializer: JSON
     properties:
       bootstrap.servers: "kafka:29092"
-    from: "{{ trigger.value }}"
+    from:
+      key: "{{ trigger.value.email }}"
+      value: "{{ trigger.value }}"
+      headers:
+        source: "/kestra/namespace/{{flow.namespace}}/flow/{{flow.id}}"
 triggers:
   - id: datagen
     disabled: true
-    type: io.kestra.plugin.datagen.Trigger
+    type: io.kestra.plugin.datagen.core.Trigger
     interval: PT5S
     batchSize: 1
     generator:

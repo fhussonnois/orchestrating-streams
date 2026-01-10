@@ -8,7 +8,7 @@ tasks:
       bootstrap.servers: "kafka:29092"
     keySerializer: STRING
     valueSerializer: JSON
-    key: "my-key"
     from:
-      "event": "Hello Kafka!"
-      "timestamp": "{{ taskrun.startDate }}"
+      key: "my-key"
+      value: "Hello Kafka!"
+      timestamp: "{{ taskrun.startDate }}"

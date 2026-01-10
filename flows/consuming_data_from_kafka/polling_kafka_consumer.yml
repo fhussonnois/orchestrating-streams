@@ -1,0 +1,27 @@
+id: polling_kafka_consumer
+namespace: orchestrating.streams.consumer
+tasks:
+  - id: for_each
+    runIf: "{{ trigger.messagesCount > 0 }}"
+    type: io.kestra.plugin.core.flow.ForEachItem
+    items: "{{ trigger.uri }}"
+    namespace: orchestrating.streams.consumer
+    flowId: log_kafka_record
+    wait: true # wait for the subflow execution
+    batch:
+      rows: 1
+    inputs:
+      record: "{{ taskrun.items }}" # special variable that contains the items of the batch
+triggers:
+  - id: kafka_consume
+    type: io.kestra.plugin.kafka.Trigger
+    interval: PT1S
+    maxRecords: 10
+    pollDuration: PT1S
+    topic: datagen_topic
+    serdeProperties: 
+      keyDeserializer: STRING
+      valueDeserializer: JSON
+    groupId: "kestra-polling-trigger"
+    properties:
+      bootstrap.servers: "kafka:29092"

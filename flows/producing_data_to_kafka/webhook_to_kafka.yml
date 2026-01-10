@@ -7,7 +7,8 @@ tasks:
     valueSerializer: JSON
     properties:
       bootstrap.servers: "kafka:29092"
-    from: "{{ trigger.body }}"
+    from: 
+      value: "{{ trigger.body }}"
 triggers:
   - id: webhook
     type: io.kestra.plugin.core.trigger.Webhook
