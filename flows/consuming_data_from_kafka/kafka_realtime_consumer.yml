@@ -1,0 +1,23 @@
+id: kafka_realtime_consumer
+namespace: orchestrating.streams.consumer
+tasks:
+  - id: log_event
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: orchestrating.streams.consumer
+    flowId: kafka_log_record
+    inputs:
+      record: "{{ trigger }}"
+concurrency:
+  behavior: QUEUE
+  limit: 100
+triggers:
+  - id: realtime_consume
+    disabled: true
+    type: io.kestra.plugin.kafka.RealtimeTrigger
+    topic: datagen_topic
+    groupId: "kestra-realtime-consumer"
+    keyDeserializer: STRING
+    valueDeserializer: JSON
+    properties:
+      bootstrap.servers: kafka:29092
+      auto.offset.reset: latest

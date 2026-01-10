@@ -1,0 +1,17 @@
+id: kafka_log_record
+namespace: orchestrating.streams.consumer
+inputs:
+ - id: record
+   type: JSON
+   description: A kafka consumer record
+   required: true
+tasks:
+  - id: log
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      Received Kafka record"
+        Topic: {{ inputs.record.topic }}
+        Partition: {{ inputs.record.partition }}
+        Offset: {{ inputs.record.offset }}
+        Key: {{ inputs.record.key }}
+        Value: {{ inputs.record.value }}

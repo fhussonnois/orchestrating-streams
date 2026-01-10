@@ -51,7 +51,7 @@ services:
     volumes:
       - kestra-data:/app/storage
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./flows/producing_data_to_kafka:/tmp/kestra-wd/flows
+      - ./flows:/tmp/kestra-wd/flows
     environment:
       KESTRA_CONFIGURATION: |
         datasources:

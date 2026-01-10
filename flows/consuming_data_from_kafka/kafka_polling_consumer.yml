@@ -1,0 +1,33 @@
+id: kafka_polling_consumer
+namespace: orchestrating.streams.consumer
+tasks:
+  # Convert an ION file into a JSONL file.
+  - id: ion_to_jsonl
+    type: io.kestra.plugin.serdes.json.IonToJson
+    from: "{{ trigger.uri }}"
+    newLine: true # JSON-L
+  # For each consumed record - run subflow 'log_kafka_record'  
+  - id: for_each
+    runIf: "{{ trigger.messagesCount > 0 }}"
+    type: io.kestra.plugin.core.flow.ForEachItem
+    items: "{{ outputs.ion_to_jsonl.uri }}"
+    batch:
+      rows: 1
+    wait: true # wait for the subflow execution
+    namespace: orchestrating.streams.consumer
+    flowId: kafka_log_record
+    inputs:
+      record: "{{ read(taskrun.items) }}" # special variable that contains the items of the batch
+triggers:
+  - id: kafka_consume
+    disabled: true
+    type: io.kestra.plugin.kafka.Trigger
+    interval: PT1S
+    maxRecords: 10
+    pollDuration: PT1S
+    topic: datagen_topic
+    keyDeserializer: STRING
+    valueDeserializer: JSON
+    groupId: "kestra-polling-consumer"
+    properties:
+      bootstrap.servers: "kafka:29092"

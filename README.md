@@ -7,6 +7,7 @@ _Welcome to Orchestrating Streams, a blog series where I explore the space of da
 ## Blog Series
 
 * [Episode 1 — Producing Data from Kestra to Kafka](https://medium.com/@fhussonnois/orchestrating-streams-episode-1-producing-data-from-kestra-to-kafka-08a67624933c)
+* [Episode 2 — Consuming Kafka Topics From Kestra](https://medium.com/@fhussonnois/orchestrating-streams-episode-2-consuming-kafka-topics-from-kestra-1c652c04cad3)
 
 ## Local Environment
 
@@ -26,3 +27,5 @@ docker compose -f kestra-docker-compose.yml up -d
 **Open Kestra**
 
 Kestra UI is available at: http://localhost:8080
+
+
