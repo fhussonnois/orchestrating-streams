@@ -1,0 +1,34 @@
+# policies/kafka-topic-policy.yaml
+apiVersion: core.jikkou.io/v1
+kind: ValidatingResourcePolicy
+metadata:
+  name: kafka-topic-guardrails
+spec:
+  failurePolicy: FAIL
+  selector:
+    matchResources:
+      - kind: KafkaTopic
+  rules:
+    - name: TopicNameMustBeLowercase
+      expression: "resource.metadata.name.matches('[a-z][a-z0-9._-]+')"
+      message: "Topic name must be lowercase alphanumeric with dots, hyphens, or underscores"
+
+    - name: MinPartitions
+      expression: "resource.spec.partitions >= 3"
+      message: "Topics must have at least 3 partitions"
+
+    - name: MaxPartitions
+      expression: "resource.spec.partitions <= 50"
+      messageExpression: "'Partition count must be <= 50, got: ' + string(resource.spec.partitions)"
+
+    - name: MinReplicationFactor
+      expression: "resource.spec.replicas >= 3"
+      message: "Replication factor must be at least 3"
+
+    - name: RetentionWithinBounds
+      expression: >
+        !has(resource.spec.configs) ||
+        !has(resource.spec.configs['retention.ms']) ||
+        (int(resource.spec.configs['retention.ms']) >= 3600000 &&
+         int(resource.spec.configs['retention.ms']) <= 604800000)
+      message: "retention.ms must be between 1 hour and 7 days"

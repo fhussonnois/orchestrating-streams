@@ -1,0 +1,14 @@
+# policies/no-topic-deletion.yaml
+apiVersion: core.jikkou.io/v1
+kind: ValidatingResourcePolicy
+metadata:
+  name: prevent-topic-deletion
+spec:
+  failurePolicy: FILTER
+  selector:
+    matchResources:
+      - kinds: KafkaTopicChange
+  rules:
+    - name: FilterDeleteOperation
+      expression: "resource.spec.op == 'DELETE'"
+      messageExpression: "'DELETE operations on topics are not authorized'"
