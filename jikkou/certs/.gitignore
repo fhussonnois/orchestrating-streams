@@ -1,0 +1,6 @@
+# Ignore all certificates and keys in this folder
+*
+
+# except the folder placeholder and this file
+!.gitkeep
+!.gitignore

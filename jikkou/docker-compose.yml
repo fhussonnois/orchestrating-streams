@@ -6,9 +6,9 @@ volumes:
 
 services:
   postgres:
-    image: postgres
+    image: postgres:18
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     environment:
       POSTGRES_DB: kestra
       POSTGRES_USER: kestra
@@ -21,16 +21,18 @@ services:
 
   kestra:
     image: kestra/kestra:latest
-    pull_policy: if_not_present
+    pull_policy: always
     user: "root"
     command: server standalone
     volumes:
       - kestra-data:/app/storage
-      - certs:/certs
+      # The Docker socket mount is what allows Kestra to spin up 
+      # task runner containers - for Jikkou, for alpine/git, for gh CLI 
+      # without installing any of those tools on the host.
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/kestra-wd:/tmp/kestra-wd
     env_file:
-        - .secrets
+      - .env_encoded
     environment:
       KESTRA_CONFIGURATION: |
         datasources:

@@ -7,7 +7,7 @@ spec:
   failurePolicy: FILTER
   selector:
     matchResources:
-      - kinds: KafkaTopicChange
+      - kind: KafkaTopicChange
   rules:
     - name: FilterDeleteOperation
       expression: "resource.spec.op == 'DELETE'"

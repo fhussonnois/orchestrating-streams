@@ -10,25 +10,25 @@ spec:
       - kind: KafkaTopic
   rules:
     - name: TopicNameMustBeLowercase
-      expression: "resource.metadata.name.matches('[a-z][a-z0-9._-]+')"
-      message: "Topic name must be lowercase alphanumeric with dots, hyphens, or underscores"
+      expression: "resource.metadata.name.matches('^[a-z0-9]+(-[a-z0-9]+)*$')"
+      messageExpression: "'Topic name must be kebab-case (lowercase alphanumerics and dashes), but was: ' + resource.metadata.name"
 
-    - name: MinPartitions
-      expression: "resource.spec.partitions >= 3"
-      message: "Topics must have at least 3 partitions"
+    - name: PartitionsMustBeAtMostTwo
+      expression: "resource.spec.partitions <= 2"
+      messageExpression: "'Partition count must be <= 2, got: ' + string(resource.spec.partitions)"
 
-    - name: MaxPartitions
-      expression: "resource.spec.partitions <= 50"
-      messageExpression: "'Partition count must be <= 50, got: ' + string(resource.spec.partitions)"
+    - name: ReplicationFactorMustBeSet
+      expression: "has(resource.spec.replicas)"
+      message: "Topic must explicitly declare spec.replicas"
 
-    - name: MinReplicationFactor
-      expression: "resource.spec.replicas >= 3"
-      message: "Replication factor must be at least 3"
+    - name: ReplicationFactorMustBeAtMostTwo
+      expression: "!has(resource.spec.replicas) || resource.spec.replicas <= 2"
+      messageExpression: "'Topic replication factor must be <= 2, but was: ' + string(resource.spec.replicas)"
 
     - name: RetentionWithinBounds
       expression: >
         !has(resource.spec.configs) ||
-        !has(resource.spec.configs['retention.ms']) ||
+        !('retention.ms' in resource.spec.configs) ||
         (int(resource.spec.configs['retention.ms']) >= 3600000 &&
          int(resource.spec.configs['retention.ms']) <= 604800000)
       message: "retention.ms must be between 1 hour and 7 days"

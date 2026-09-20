@@ -1,0 +1,475 @@
+id: kafka-topic-provisioning
+namespace: platform.kafka
+
+description: |
+  Self-service Kafka topic provisioning with GitOps, 
+  diff preview, and human-in-the-loop approval.
+
+labels:
+  team: platform
+  service: kafka
+
+inputs:
+  - id: topic
+    type: FORM
+    displayName: Topic
+    description: What to create, where, and who owns it.
+    inputs:
+      - id: name
+        type: STRING
+        displayName: Topic name
+        description: "Lowercase, with dots, hyphens or underscores."
+
+      - id: environment
+        type: SELECT
+        displayName: Environment
+        description: "Target cluster."
+        defaults: development
+        values:
+          - development
+          - staging
+          - production
+
+      - id: owner_team
+        type: STRING
+        displayName: Owner team
+        description: "Team accountable for this topic."
+
+  - id: sizing
+    type: FORM
+    displayName: Sizing
+    description: Partitioning and replication.
+    inputs:
+      - id: partitions
+        type: INT
+        displayName: Partitions
+        defaults: 2
+
+      - id: replicas
+        type: INT
+        displayName: Replication factor
+        defaults: 2
+
+  - id: retention
+    type: FORM
+    displayName: Retention
+    description: How long records are kept, and how they age out.
+    inputs:
+      - id: retention_ms
+        type: INT
+        displayName: Retention (ms)
+        description: "1 hour to 7 days."
+        defaults: 172800000
+
+      - id: cleanup_policy
+        type: SELECT
+        displayName: Cleanup policy
+        description: "Delete old records, compact by key, or both."
+        defaults: delete
+        values:
+          - delete
+          - compact
+          - compact,delete
+
+tasks:
+  # ── 1. Generate the Jikkou topic YAML ──────────────────────────
+  - id: generate_topic_yaml
+    type: io.kestra.plugin.scripts.shell.Script
+    description: "Generate the Jikkou KafkaTopic resource file"
+    script: |
+        cat > topic.yaml <<'EOF'
+        apiVersion: "kafka.jikkou.io/v1"
+        kind: KafkaTopic
+        metadata:
+          name: '{{ inputs.topic.name }}'
+          labels:
+            environment: '{{ inputs.topic.environment }}'
+            owner: '{{ inputs.topic.owner_team }}'
+            managed-by: kestra
+            execution-id: '{{ execution.id }}'
+        spec:
+          partitions: {{ inputs.sizing.partitions }}
+          replicas: {{ inputs.sizing.replicas }}
+          configs:
+            retention.ms: {{ inputs.retention.retention_ms }}
+            cleanup.policy: '{{ inputs.retention.cleanup_policy }}'
+        EOF
+        cat topic.yaml
+    outputFiles:
+      - topic.yaml
+
+  # ── 2. Validate the resource before touching GitHub ────────────
+  - id: jikkou_validate
+    type: io.kestra.plugin.scripts.shell.Script
+    description: "Validate the topic definition before any git work"
+    containerImage: streamthoughts/jikkou:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: ALWAYS
+      user: root
+    env:
+      KAFKA_BOOTSTRAP_SERVERS: "{{ secret('KAFKA_BOOTSTRAP_SERVERS')}}"
+      KAFKA_TRUSTSTORE_PATH: "client.truststore.jks"
+      KAFKA_TRUSTSTORE_PASSWORD: "{{ secret('KAFKA_TRUSTSTORE_PASSWORD') }}"
+      KAFKA_KEYSTORE_PATH: "client.keystore.p12"
+      KAFKA_KEYSTORE_PASSWORD: "{{ secret('KAFKA_KEYSTORE_PASSWORD') }}"
+      KAFKA_KEY_PASSWORD: "{{ secret('KAFKA_KEY_PASSWORD') }}"
+      JIKKOUCONFIG: .jikkou/config.json
+    namespaceFiles:
+      enabled: true
+    inputFiles:
+      topic.yaml: "{{ outputs.generate_topic_yaml.outputFiles['topic.yaml'] }}"
+    script: |
+        jikkou config set-context aiven --config-file application.conf
+        jikkou config use-context aiven
+
+        jikkou validate --files topic.yaml --output YAML
+
+  # ── 3. Run Jikkou diff against the live cluster ────────────────
+  - id: jikkou_diff
+    type: io.kestra.plugin.scripts.shell.Script
+    description: "Compute diff between desired state and live Kafka cluster"
+    containerImage: streamthoughts/jikkou:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      user: root
+      pullPolicy: ALWAYS
+    env:
+      KAFKA_BOOTSTRAP_SERVERS: "{{ secret('KAFKA_BOOTSTRAP_SERVERS')}}"
+      KAFKA_TRUSTSTORE_PATH: "client.truststore.jks"
+      KAFKA_TRUSTSTORE_PASSWORD: "{{ secret('KAFKA_TRUSTSTORE_PASSWORD') }}"
+      KAFKA_KEYSTORE_PATH: "client.keystore.p12"
+      KAFKA_KEYSTORE_PASSWORD: "{{ secret('KAFKA_KEYSTORE_PASSWORD') }}"
+      KAFKA_KEY_PASSWORD: "{{ secret('KAFKA_KEY_PASSWORD') }}"
+      JIKKOUCONFIG: .jikkou/config.json
+    namespaceFiles:
+      enabled: true
+    inputFiles:
+      topic.yaml: "{{ outputs.generate_topic_yaml.outputFiles['topic.yaml'] }}"
+    script: |
+        jikkou config set-context aiven --config-file application.conf
+        jikkou config use-context aiven
+
+        # Run diff and capture the output
+        jikkou diff \
+          --files topic.yaml \
+          --output json > diff_result.json 2>&1 || true
+
+        cat diff_result.json
+
+        # Surface diff as a Kestra output
+        DIFF_CONTENT=$(cat diff_result.json)
+        echo '::{"outputs":{"diff_result":"${DIFF_CONTENT}"}}::'
+    outputFiles:
+      - diff_result.json
+
+  # ── 4. Commit to a feature branch on GitHub ────────────────────
+  - id: create_branch_and_commit
+    type: io.kestra.plugin.scripts.shell.Commands
+    description: "Push the topic YAML to a feature branch"
+    containerImage: alpine/git:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      GITHUB_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+      GITHUB_REPO: "{{ secret('GITHUB_REPO') }}"
+    inputFiles:
+      topic.yaml: "{{ outputs.generate_topic_yaml.outputFiles['topic.yaml'] }}"
+    commands:
+      - |
+        BRANCH="topic/{{ inputs.topic.name }}-{{ execution.id }}"
+        REPO_URL="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+
+        git clone --depth 1 "$REPO_URL" repo
+        cd repo
+        git checkout -b "$BRANCH"
+
+        mkdir -p topics/{{ inputs.topic.environment }}
+        cp ../topic.yaml "topics/{{ inputs.topic.environment }}/{{ inputs.topic.name }}.yaml"
+
+        git config user.email "kestra@your-org.com"
+        git config user.name "Kestra Bot"
+        git add .
+        git commit -m "feat(kafka): request topic {{ inputs.topic.name }} [{{ inputs.topic.environment }}]
+
+        Requested by: {{ inputs.topic.owner_team }}
+        Execution: {{ execution.id }}
+        Partitions: {{ inputs.sizing.partitions }}
+        Replicas: {{ inputs.sizing.replicas }}
+        Retention: {{ inputs.retention.retention_ms }}ms"
+
+        git push origin "$BRANCH"
+
+        echo '::{"outputs":{"branch":"'"$BRANCH"'"}}::'
+
+  # ── 5. Open the pull request (BEFORE anyone is asked to approve) ─
+  - id: open_pull_request
+    type: io.kestra.plugin.scripts.shell.Commands
+    description: "Open the PR carrying the topic request and its diff"
+    containerImage: alpine:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      GH_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+      GH_REPO: "{{ secret('GITHUB_REPO') }}"
+    inputFiles:
+      diff_result.json: "{{ outputs.jikkou_diff.outputFiles['diff_result.json'] }}"
+    commands:
+      - |
+        # gh is not in the base image; github-cli lives in Alpine community.
+        apk add --no-cache github-cli > /dev/null
+
+        BRANCH="{{ outputs.create_branch_and_commit.vars.branch }}"
+
+        # PR body is just the Jikkou diff (capped: GitHub rejects bodies
+        # over 65536 characters).
+        {
+          echo '```json'
+          head -c 60000 diff_result.json
+          echo '```'
+        } > pr-body.md
+
+        PR_URL=$(gh pr create \
+          --repo "$GH_REPO" \
+          --head "$BRANCH" \
+          --base main \
+          --title "feat(kafka): provision {{ inputs.topic.name }} [{{ inputs.topic.environment }}]" \
+          --body-file pr-body.md)
+
+        echo "Pull request opened: $PR_URL"
+        echo "::{\"outputs\":{\"pr_url\":\"${PR_URL}\"}}::"
+
+  # ── 6. Ask the platform team to review and approve ─────────────
+  - id: notify_slack
+    type: io.kestra.plugin.slack.notifications.SlackIncomingWebhook
+    description: "Ask for review, linking the PR and the approval page"
+    url: "{{ secret('SLACK_WEBHOOK_URL') }}"
+    payload: |
+      {
+        "text": ":kafka: *Topic Provisioning Request*\n\n*Topic:* `{{ inputs.topic.name }}`\n*Environment:* `{{ inputs.topic.environment }}`\n*Requested by:* {{ inputs.topic.owner_team }}\n*Partitions:* {{ inputs.sizing.partitions }} | *Replicas:* {{ inputs.sizing.replicas }}\n*Retention:* {{ inputs.retention.retention_ms }}ms\n*Cleanup:* {{ inputs.retention.cleanup_policy }}\n\n:memo: <{{ outputs.open_pull_request.vars.pr_url }}|Review the pull request> - resource + Jikkou diff\n:white_check_mark: <{{ kestra.url }}ui/executions/{{ flow.namespace }}/{{ flow.id }}/{{ execution.id }}|Approve or reject in Kestra>"
+      }
+
+  # ── 7. Pause for human approval ────────────────────────────────
+  - id: wait_for_approval
+    type: io.kestra.plugin.core.flow.Pause
+    description: "Wait for a platform engineer to approve or reject"
+    onResume:
+      - id: approved
+        type: BOOL
+        displayName: Approve
+        description: "Approve or reject this request."
+        defaults: true
+      - id: review_notes
+        type: STRING
+        displayName: Review notes
+        description: "Comment posted to the pull request."
+        defaults: "Approved"
+
+  # ── 8. Check approval decision ─────────────────────────────────
+  - id: check_approval
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ outputs.wait_for_approval.onResume.approved }}"
+    then:
+      # ── 8a. Merge the approved PR into main ────────────────────
+      - id: merge_pr
+        type: io.kestra.plugin.scripts.shell.Commands
+        description: "Merge the approved pull request"
+        containerImage: alpine:latest
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+        env:
+          GH_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+          GH_REPO: "{{ secret('GITHUB_REPO') }}"
+        commands:
+          - |
+            # gh is not in the base image; github-cli lives in Alpine community.
+            apk add --no-cache github-cli > /dev/null
+
+            BRANCH="{{ outputs.create_branch_and_commit.vars.branch }}"
+
+            gh pr comment "$BRANCH" \
+              --repo "$GH_REPO" \
+              --body "Approved in Kestra execution {{ execution.id }}: {{ outputs.wait_for_approval.onResume.review_notes }}"
+
+            gh pr merge "$BRANCH" \
+              --repo "$GH_REPO" \
+              --squash \
+              --delete-branch
+
+            # The squash commit now on main. Captured by PR url rather than by
+            # branch, because --delete-branch just removed the branch ref.
+            MERGE_SHA=$(gh pr view "{{ outputs.open_pull_request.vars.pr_url }}" \
+              --json mergeCommit --jq .mergeCommit.oid)
+
+            echo "Merged main as $MERGE_SHA"
+            echo "::{\"outputs\":{\"merge_sha\":\"${MERGE_SHA}\"}}::"
+
+      # ── 8b. Read the definition back from main ─────────────────
+      - id: fetch_from_main
+        type: io.kestra.plugin.scripts.shell.Commands
+        description: "Fetch the merged topic definition from main"
+        containerImage: alpine/git:latest
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+        env:
+          GITHUB_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+          GITHUB_REPO: "{{ secret('GITHUB_REPO') }}"
+        commands:
+          - |
+            git clone --depth 1 --branch main \
+              "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" repo
+
+            cp "repo/topics/{{ inputs.topic.environment }}/{{ inputs.topic.name }}.yaml" topic.yaml
+            cat topic.yaml
+        outputFiles:
+          - topic.yaml
+
+      # ── 8c. Reconcile the cluster from what main now holds ─────
+      - id: jikkou_apply
+        type: io.kestra.plugin.scripts.shell.Commands
+        description: "Apply the merged topic definition to the Kafka cluster"
+        containerImage: streamthoughts/jikkou:latest
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          user: root
+        env:
+          KAFKA_BOOTSTRAP_SERVERS: "{{ secret('KAFKA_BOOTSTRAP_SERVERS')}}"
+          KAFKA_TRUSTSTORE_PATH: "client.truststore.jks"
+          KAFKA_TRUSTSTORE_PASSWORD: "{{ secret('KAFKA_TRUSTSTORE_PASSWORD') }}"
+          KAFKA_KEYSTORE_PATH: "client.keystore.p12"
+          KAFKA_KEYSTORE_PASSWORD: "{{ secret('KAFKA_KEYSTORE_PASSWORD') }}"
+          KAFKA_KEY_PASSWORD: "{{ secret('KAFKA_KEY_PASSWORD') }}"
+          JIKKOUCONFIG: .jikkou/config.json
+        namespaceFiles:
+          enabled: true
+        inputFiles:
+          topic.yaml: "{{ outputs.fetch_from_main.outputFiles['topic.yaml'] }}"
+        commands:
+          - |
+            jikkou config set-context aiven --config-file application.conf
+            jikkou config use-context aiven
+
+            # Do not let a failed apply kill the task: main has already been
+            # merged, so the next task has to be given the chance to roll it back.
+            if jikkou apply --files topic.yaml --output json; then
+              APPLY_OK=true
+            else
+              APPLY_OK=false
+            fi
+
+            # jikkou's JSON output ends without a newline, so open a fresh
+            # line first: Kestra only parses the ::{...}:: directive when it
+            # sits alone on its own line.
+            printf '\n::{"outputs":{"apply_ok":"%s"}}::\n' "$APPLY_OK"
+
+      # ── 8d. Did the cluster accept it? ─────────────────────────
+      - id: check_apply
+        type: io.kestra.plugin.core.flow.If
+        condition: "{{ outputs.jikkou_apply.vars.apply_ok == 'true' }}"
+        then:
+          - id: notify_success
+            type: io.kestra.plugin.slack.notifications.SlackIncomingWebhook
+            url: "{{ secret('SLACK_WEBHOOK_URL') }}"
+            payload: |
+              {
+                "text": ":white_check_mark: *Topic `{{ inputs.topic.name }}` provisioned successfully!*\n\n*Environment:* {{ inputs.topic.environment }}\n*Notes:* {{ outputs.wait_for_approval.onResume.review_notes }}\n\n:twisted_rightwards_arrows: <{{ outputs.open_pull_request.vars.pr_url }}|Pull request merged to main>"
+              }
+
+        else:
+          - id: revert_merge
+            type: io.kestra.plugin.scripts.shell.Commands
+            description: "Revert the merge commit, main no longer claims the topic"
+            containerImage: alpine/git:latest
+            taskRunner:
+              type: io.kestra.plugin.scripts.runner.docker.Docker
+            env:
+              GITHUB_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+              GITHUB_REPO: "{{ secret('GITHUB_REPO') }}"
+            commands:
+              - |
+                # Full clone on purpose. On a --depth 1 clone git treats the
+                # grafted HEAD as a root commit and reverts the WHOLE tree,
+                # which wipes main instead of undoing one topic.
+                git clone --branch main \
+                  "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" repo
+                cd repo
+
+                git config user.email "kestra@your-org.com"
+                git config user.name "Kestra Bot"
+
+                git revert --no-edit "{{ outputs.merge_pr.vars.merge_sha }}"
+
+                # Safety net: the revert must touch exactly this topic's file.
+                EXPECTED="topics/{{ inputs.topic.environment }}/{{ inputs.topic.name }}.yaml"
+                CHANGED=$(git show --name-only --pretty=format: HEAD | sed '/^$/d')
+
+                if [ "$CHANGED" != "$EXPECTED" ]; then
+                  echo "Refusing to push. Revert touched unexpected paths:" >&2
+                  echo "$CHANGED" >&2
+                  exit 1
+                fi
+
+                git push origin main
+
+          - id: comment_rollback_on_pr
+            type: io.kestra.plugin.scripts.shell.Commands
+            description: "Record the rollback on the pull request"
+            containerImage: alpine:latest
+            taskRunner:
+              type: io.kestra.plugin.scripts.runner.docker.Docker
+            env:
+              GH_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+              GH_REPO: "{{ secret('GITHUB_REPO') }}"
+            commands:
+              - |
+                apk add --no-cache github-cli > /dev/null
+
+                gh pr comment "{{ outputs.open_pull_request.vars.pr_url }}" \
+                  --body "Jikkou apply failed against \`{{ inputs.topic.environment }}\`. Merge commit {{ outputs.merge_pr.vars.merge_sha }} has been reverted on main."
+
+          - id: notify_apply_failure
+            type: io.kestra.plugin.slack.notifications.SlackIncomingWebhook
+            url: "{{ secret('SLACK_WEBHOOK_URL') }}"
+            payload: |
+              {
+                "text": ":rotating_light: *Apply failed for `{{ inputs.topic.name }}` - main was rolled back*\n\n*Environment:* `{{ inputs.topic.environment }}`\n*Reverted commit:* `{{ outputs.merge_pr.vars.merge_sha }}`\n\n:twisted_rightwards_arrows: <{{ outputs.open_pull_request.vars.pr_url }}|Pull request>\n:mag: <{{ kestra.url }}ui/executions/{{ flow.namespace }}/{{ flow.id }}/{{ execution.id }}|Execution logs>"
+              }
+
+          - id: fail_execution
+            type: io.kestra.plugin.scripts.shell.Commands
+            description: "Surface the failure in the execution state"
+            commands:
+              - |
+                echo "jikkou apply failed; main reverted" >&2
+                exit 1
+
+    else:
+      # ── 8e. Handle rejection ───────────────────────────────────
+      - id: close_pull_request
+        type: io.kestra.plugin.scripts.shell.Commands
+        description: "Close the pull request and delete its branch"
+        containerImage: alpine:latest
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+        env:
+          GH_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+          GH_REPO: "{{ secret('GITHUB_REPO') }}"
+        commands:
+          - |
+            # gh is not in the base image; github-cli lives in Alpine community.
+            apk add --no-cache github-cli > /dev/null
+
+            BRANCH="{{ outputs.create_branch_and_commit.vars.branch }}"
+
+            gh pr close "$BRANCH" \
+              --repo "$GH_REPO" \
+              --delete-branch \
+              --comment "Rejected in Kestra execution {{ execution.id }}: {{ outputs.wait_for_approval.onResume.review_notes }}"
+
+      - id: notify_rejection
+        type: io.kestra.plugin.slack.notifications.SlackIncomingWebhook
+        url: "{{ secret('SLACK_WEBHOOK_URL') }}"
+        payload: |
+          {
+            "text": ":x: *Topic `{{ inputs.topic.name }}` request was rejected.*\n\n*Reason:* {{ outputs.wait_for_approval.onResume.review_notes }}\n\n:twisted_rightwards_arrows: <{{ outputs.open_pull_request.vars.pr_url }}|Pull request closed>"
+          }
